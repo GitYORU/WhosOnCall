@@ -361,8 +361,8 @@ function baseShiftsInRange(windowStart, windowEnd){
 function overridesInRange(windowStart, windowEnd){
   return (config.overrides||[]).map(o => ({
     id: o.id,
-    start: new Date(o.start+'T00:00:00'),
-    end: new Date(new Date(o.end+'T00:00:00').getTime() + MS_DAY),
+    start: new Date(o.start+'T07:30:00'),
+    end: new Date(new Date(o.end+'T07:30:00').getTime() + MS_DAY),
     person: o.person,
     phone: o.phone || '',
     color: o.color || '',
