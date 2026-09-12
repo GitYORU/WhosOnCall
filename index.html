@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>On-Call Watch</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
   :root{
     --ink:#1E2521;
@@ -40,7 +43,8 @@
   }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--paper);color:var(--ink);}
-  .wrap{font-family:'IBM Plex Sans',system-ui,sans-serif;max-width:640px;margin:0 auto;padding:36px 24px 60px;}
+  .wrap{font-family:'IBM Plex Sans',system-ui,sans-serif;max-width:720px;margin:0 auto;padding:36px 24px 60px;}
+  input, select{min-width:0;}
   .masthead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;}
   .title{font-family:'Source Serif 4',Georgia,serif;font-size:28px;font-weight:700;margin:0;}
   .tagline{color:var(--muted);font-size:14px;margin:0 0 30px;}
@@ -107,6 +111,37 @@
   .gate-sub{font-size:13px;color:var(--muted);margin:0 0 18px;}
   .gate-box input{width:100%;margin-bottom:10px;}
   .gate-box button{width:100%;}
+
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;flex:none;}
+  .color-input{width:36px;height:36px;padding:2px;flex:none;border-radius:8px;border:0.5px solid var(--border);background:var(--paper);}
+  .who-line{display:flex;align-items:center;}
+  .hero-name-row{display:flex;align-items:center;}
+  .hero-name-row .dot{width:14px;height:14px;margin-right:10px;}
+
+  .export-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0;}
+  .export-row label{font-size:13px;color:var(--muted);}
+  .export-row input[type=number]{width:70px;flex:none;}
+  .export-row select{flex:none;}
+  #export-btn{white-space:nowrap;}
+
+  @media (max-width:640px){
+    .wrap{padding:28px 18px 48px;}
+    .hero{padding:20px 20px;}
+    .hero-name{font-size:27px;}
+    .masthead{flex-wrap:wrap;row-gap:6px;}
+    .field-row{flex-wrap:wrap;row-gap:8px;}
+    .date-pair{flex-direction:column;}
+    .phone-input{width:100%;}
+    .name-count{display:none;}
+    .row .date{min-width:0;}
+    button{padding:10px 12px;}
+    .export-row{flex-direction:column;align-items:stretch;}
+    .export-row input[type=number], .export-row select, #export-btn{width:100%;}
+  }
+  @media (max-width:380px){
+    .title{font-size:24px;}
+    .hero-name{font-size:23px;}
+  }
 </style>
 </head>
 <body>
@@ -129,6 +164,13 @@
   <div id="hero"></div>
   <div id="upcoming-wrap"></div>
 
+  <details id="history-details">
+    <summary>Previously on call<span class="chev">▾</span></summary>
+    <div class="panel">
+      <div id="history-wrap"></div>
+    </div>
+  </details>
+
   <details id="swap-details">
     <summary>Swaps and sick days<span class="chev">▾</span></summary>
     <div class="panel">
@@ -137,6 +179,7 @@
       <div class="field-row add-row">
         <input type="text" id="swap-name" placeholder="Who's covering">
         <input type="text" id="swap-phone" class="phone-input" placeholder="Phone (optional)">
+        <input type="color" id="swap-color" class="color-input" title="Color for this swap">
       </div>
       <div class="field-row add-row">
         <label class="field-label">From</label>
@@ -160,6 +203,7 @@
       <div class="field-row add-row">
         <input type="text" id="new-name" placeholder="Add a name">
         <input type="text" id="new-phone" class="phone-input" placeholder="Phone (optional)">
+        <input type="color" id="new-color" class="color-input" title="Color for this person">
         <button id="add-btn">Add</button>
       </div>
       <div class="anchor-block">
@@ -173,6 +217,26 @@
         </div>
         <p class="hint" id="anchor-hint">Pick any Friday — that person starts their shift at 7:30am that day.</p>
       </div>
+    </div>
+  </details>
+
+  <details id="export-details">
+    <summary>Download schedule<span class="chev">▾</span></summary>
+    <div class="panel">
+      <p class="hint">Exports a calendar of the schedule, color-coded by person, starting this month.</p>
+      <div class="export-row">
+        <label for="export-months">Months to include</label>
+        <input type="number" id="export-months" min="1" max="12" value="1">
+      </div>
+      <div class="export-row">
+        <label for="export-format">Format</label>
+        <select id="export-format">
+          <option value="pdf">PDF</option>
+          <option value="xlsx">Spreadsheet (.xlsx)</option>
+        </select>
+        <button id="export-btn" class="primary">Download</button>
+      </div>
+      <p class="warn" id="export-error" style="display:none;"></p>
     </div>
   </details>
 
@@ -202,6 +266,23 @@ let config = { people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [] }
 let loaded = false;
 let countdownTimer = null;
 
+const PALETTE = ['#D98E2B','#2F6E68','#5B7FBF','#B4432F','#7D5CA6','#3F9142','#C0577A','#8C6A3F','#4E8FA8','#A6772F'];
+const DEFAULT_COLOR = '#8C8C8C';
+
+function nextPaletteColor(){
+  return PALETTE[config.people.length % PALETTE.length];
+}
+function personColorFor(name){
+  const p = config.people.find(pp => pp.name.toLowerCase() === (name||'').toLowerCase());
+  return p ? (p.color || DEFAULT_COLOR) : DEFAULT_COLOR;
+}
+function hexToRgb(hex){
+  const m = (hex||DEFAULT_COLOR).replace('#','');
+  const full = m.length===3 ? m.split('').map(c=>c+c).join('') : m;
+  const bigint = parseInt(full,16) || 0x8C8C8C;
+  return [(bigint>>16)&255, (bigint>>8)&255, bigint&255];
+}
+
 function fmtDate(d){
   return d.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
 }
@@ -219,9 +300,9 @@ function isFriday(dateStr){
   return d.getDay() === 5;
 }
 
-function normalizePerson(p){
-  if(typeof p === 'string') return { name: p, phone: '' };
-  return { name: p.name || '', phone: p.phone || '' };
+function normalizePerson(p, idx){
+  if(typeof p === 'string') return { name: p, phone: '', color: PALETTE[idx % PALETTE.length] };
+  return { name: p.name || '', phone: p.phone || '', color: p.color || PALETTE[idx % PALETTE.length] };
 }
 
 function applyIncoming(parsed){
@@ -284,6 +365,7 @@ function overridesInRange(windowStart, windowEnd){
     end: new Date(new Date(o.end+'T00:00:00').getTime() + MS_DAY),
     person: o.person,
     phone: o.phone || '',
+    color: o.color || '',
     note: o.note || ''
   })).filter(o => o.end > windowStart && o.start < windowEnd)
     .sort((a,b)=> a.start - b.start);
@@ -308,9 +390,9 @@ function buildSegments(windowStart, windowEnd){
     const ov = overrides.find(o => o.start <= segStart && segEnd <= o.end);
     const b = base.find(b => b.start <= segStart && segEnd <= b.end);
     if(ov){
-      segments.push({ start: segStart, end: segEnd, person: ov.person, phone: ov.phone, isOverride: true, note: ov.note, basePerson: b ? b.person : null });
+      segments.push({ start: segStart, end: segEnd, person: ov.person, phone: ov.phone, color: ov.color || personColorFor(ov.person) || DEFAULT_COLOR, isOverride: true, note: ov.note, basePerson: b ? b.person : null });
     } else if(b){
-      segments.push({ start: segStart, end: segEnd, person: b.person, phone: b.phone, isOverride: false });
+      segments.push({ start: segStart, end: segEnd, person: b.person, phone: b.phone, color: personColorFor(b.person), isOverride: false });
     }
   }
 
@@ -353,7 +435,7 @@ function renderHero(){
   hero.innerHTML = `
     <div class="hero">
       <p class="hero-label">${label}</p>
-      <p class="hero-name">${current.person}</p>
+      <p class="hero-name-row"><span class="dot" style="background:${current.color||DEFAULT_COLOR};"></span><span class="hero-name">${current.person}</span></p>
       ${current.isOverride ? `<p class="hero-cover">Covering${current.basePerson ? ' for ' + current.basePerson : ''}${current.note ? ' — ' + current.note : ''}</p>` : ''}
       ${current.phone ? `<p class="phone-line"><a href="tel:${telHref(current.phone)}">${current.phone}</a></p>` : ''}
       <p class="hero-range">${started ? 'Since ' + fmtDateTime(current.start) : 'Starting ' + fmtDateTime(current.start)} → hands off ${fmtDateTime(current.end)}</p>
@@ -406,7 +488,38 @@ function renderUpcoming(){
         return `
         <div class="row">
           <span class="date">${range}</span>
-          <span class="who">${s.person}${s.isOverride ? '<span class="tag">covering</span>' : ''}</span>
+          <span class="who who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covering</span>' : ''}</span>
+        </div>
+      `;}).join('')}
+    </div>
+  `;
+}
+
+function renderHistory(){
+  const wrap = document.getElementById('history-wrap');
+  if(!config.people.length || !config.anchorDate || !isFriday(config.anchorDate)){
+    wrap.innerHTML = '<div class="empty">Nothing to show yet.</div>';
+    return;
+  }
+  const anchor = new Date(config.anchorDate+'T07:30:00');
+  const now = new Date();
+  const historyStart = new Date(now.getTime() - 4*MS_WEEK);
+  const windowStart = new Date(Math.min(+anchor, +historyStart));
+  const windowEnd = now;
+  const segments = buildSegments(windowStart, windowEnd);
+
+  const list = segments.filter(s => +s.end <= +now && +s.end > +historyStart).slice().reverse();
+  if(!list.length){ wrap.innerHTML = '<div class="empty">Nothing in the last 4 weeks.</div>'; return; }
+
+  wrap.innerHTML = `
+    <div class="upcoming">
+      ${list.map(s => {
+        const sameDay = fmtDayOnly(s.start) === fmtDayOnly(new Date(s.end - MS_DAY));
+        const range = sameDay ? fmtDate(s.start) : `${fmtDayOnly(s.start)} – ${fmtDayOnly(new Date(s.end - MS_DAY))}`;
+        return `
+        <div class="row">
+          <span class="date">${range}</span>
+          <span class="who who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covered</span>' : ''}</span>
         </div>
       `;}).join('')}
     </div>
@@ -454,6 +567,7 @@ function renderRoster(){
       <span class="name-count">${i+1}</span>
       <input type="text" class="name-input" value="${p.name.replace(/"/g,'&quot;')}" data-idx="${i}">
       <input type="text" class="phone-input phone-field-input" value="${(p.phone||'').replace(/"/g,'&quot;')}" placeholder="Phone" data-idx="${i}">
+      <input type="color" class="color-input color-field-input" value="${p.color||DEFAULT_COLOR}" data-idx="${i}" title="Color">
       <button class="icon-btn move-up" data-idx="${i}" title="Move up" ${i===0?'disabled':''}>↑</button>
       <button class="icon-btn move-down" data-idx="${i}" title="Move down" ${i===config.people.length-1?'disabled':''}>↓</button>
       <button class="icon-btn remove-btn" data-idx="${i}" title="Remove">✕</button>
@@ -486,6 +600,14 @@ function renderRoster(){
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
       config.people[i].phone = e.target.value.trim();
+      saveConfig();
+      render();
+    });
+  });
+  listEl.querySelectorAll('.color-field-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const i = +e.target.dataset.idx;
+      config.people[i].color = e.target.value;
       saveConfig();
       render();
     });
@@ -524,26 +646,32 @@ function render(){
   if(!loaded) return;
   renderHero();
   renderUpcoming();
+  renderHistory();
   renderSwaps();
   renderRoster();
   const tzNote = document.getElementById('tz-note');
   tzNote.textContent = `Timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`;
+  const newColorInput = document.getElementById('new-color');
+  if(newColorInput && !newColorInput.dataset.touched) newColorInput.value = nextPaletteColor();
 }
 
 document.getElementById('add-btn').addEventListener('click', () => {
   const input = document.getElementById('new-name');
   const phoneInput = document.getElementById('new-phone');
+  const colorInput = document.getElementById('new-color');
   const name = input.value.trim();
   if(!name) return;
-  config.people.push({ name, phone: phoneInput.value.trim() });
+  config.people.push({ name, phone: phoneInput.value.trim(), color: colorInput.value || nextPaletteColor() });
   if(config.people.length === 1 && !config.anchorDate){
     document.getElementById('roster-details').open = true;
   }
   input.value = '';
   phoneInput.value = '';
+  colorInput.dataset.touched = '';
   saveConfig();
   render();
 });
+document.getElementById('new-color').addEventListener('input', e => { e.target.dataset.touched = '1'; });
 document.getElementById('new-name').addEventListener('keydown', e => {
   if(e.key === 'Enter') document.getElementById('add-btn').click();
 });
@@ -564,6 +692,7 @@ document.getElementById('anchor-person').addEventListener('change', e => {
 document.getElementById('swap-add-btn').addEventListener('click', () => {
   const nameEl = document.getElementById('swap-name');
   const phoneEl = document.getElementById('swap-phone');
+  const colorEl = document.getElementById('swap-color');
   const startEl = document.getElementById('swap-start');
   const endEl = document.getElementById('swap-end');
   const noteEl = document.getElementById('swap-note');
@@ -590,13 +719,227 @@ document.getElementById('swap-add-btn').addEventListener('click', () => {
     id: 'ov_' + Date.now() + '_' + Math.floor(Math.random()*1000),
     person: name,
     phone: phoneEl.value.trim(),
+    color: colorEl.dataset.touched ? colorEl.value : '',
     start,
     end,
     note: noteEl.value.trim()
   });
   nameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
+  colorEl.dataset.touched = '';
   saveConfig();
   render();
+});
+document.getElementById('swap-color').addEventListener('input', e => { e.target.dataset.touched = '1'; });
+
+function dayAssignment(date, segments){
+  const noon = new Date(date); noon.setHours(12,0,0,0);
+  const seg = segments.find(s => s.start <= noon && noon < s.end);
+  if(!seg) return null;
+  return { person: seg.person, phone: seg.phone || '', color: seg.color || DEFAULT_COLOR, isOverride: seg.isOverride };
+}
+
+function buildExportMonths(monthsCount){
+  const today = new Date();
+  const firstMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const rangeStart = firstMonth;
+  const rangeEnd = new Date(firstMonth.getFullYear(), firstMonth.getMonth()+monthsCount, 1);
+  const segments = buildSegments(rangeStart, rangeEnd);
+  const months = [];
+  for(let m=0; m<monthsCount; m++){
+    const monthDate = new Date(firstMonth.getFullYear(), firstMonth.getMonth()+m, 1);
+    const year = monthDate.getFullYear(), monthIdx = monthDate.getMonth();
+    const daysInMonth = new Date(year, monthIdx+1, 0).getDate();
+    const firstWeekday = new Date(year, monthIdx, 1).getDay();
+    const cells = [];
+    for(let i=0;i<firstWeekday;i++) cells.push(null);
+    for(let d=1; d<=daysInMonth; d++){
+      const date = new Date(year, monthIdx, d);
+      const assignment = dayAssignment(date, segments);
+      cells.push({
+        date,
+        person: assignment ? assignment.person : '—',
+        phone: assignment ? assignment.phone : '',
+        color: assignment ? assignment.color : '#D3D6CC',
+        isOverride: assignment ? assignment.isOverride : false
+      });
+    }
+    while(cells.length % 7 !== 0) cells.push(null);
+    const weeks = [];
+    for(let i=0;i<cells.length;i+=7) weeks.push(cells.slice(i,i+7));
+    months.push({ label: monthDate.toLocaleDateString(undefined,{month:'long',year:'numeric'}), weeks });
+  }
+  return months;
+}
+
+function triggerDownload(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+function textColorForBg(rgb){
+  const [r,g,b] = rgb;
+  const luminance = (0.299*r + 0.587*g + 0.114*b) / 255;
+  return luminance > 0.55 ? [26,31,28] : [255,255,255];
+}
+
+function drawMonthPage(doc, month){
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 24;
+  const gridTop = margin + 28;
+  const gridW = pageW - margin*2;
+  const gridH = pageH - gridTop - margin;
+  const cols = 7, rows = month.weeks.length;
+  const cellW = gridW/cols, cellH = gridH/rows;
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(16);
+  doc.setTextColor(30,37,33);
+  doc.text(month.label, margin, margin+6);
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(9);
+  doc.setTextColor(107,114,104);
+  dayNames.forEach((d,i)=> doc.text(d, margin + i*cellW + 6, gridTop-6));
+
+  month.weeks.forEach((week, wi) => {
+    week.forEach((day, di) => {
+      const x = margin + di*cellW;
+      const y = gridTop + wi*cellH;
+      if(day){
+        const [r,g,b] = hexToRgb(day.color);
+        doc.setFillColor(r,g,b);
+        doc.rect(x, y, cellW, cellH, 'F');
+        doc.setDrawColor(255,255,255);
+        doc.setLineWidth(1.2);
+        doc.rect(x, y, cellW, cellH);
+
+        const [tr,tg,tb] = textColorForBg([r,g,b]);
+        doc.setTextColor(tr,tg,tb);
+        const padX = 7;
+        let cursorY = y + 16;
+
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(11);
+        doc.text(String(day.date.getDate()), x+padX, cursorY);
+        cursorY += 15;
+
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(10);
+        const nameLines = doc.splitTextToSize(day.person, cellW - padX*2);
+        doc.text(nameLines, x+padX, cursorY);
+        cursorY += nameLines.length * 12;
+
+        if(day.phone){
+          doc.setFont('helvetica','normal');
+          doc.setFontSize(9);
+          const phoneLines = doc.splitTextToSize(day.phone, cellW - padX*2);
+          doc.text(phoneLines, x+padX, cursorY + 3);
+        }
+      } else {
+        doc.setDrawColor(230,230,225);
+        doc.setLineWidth(0.75);
+        doc.rect(x, y, cellW, cellH);
+      }
+    });
+  });
+}
+
+function downloadPDF(monthsCount){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'landscape', unit:'pt', format:'a4' });
+  const months = buildExportMonths(monthsCount);
+  months.forEach((month, mi) => {
+    if(mi>0) doc.addPage();
+    drawMonthPage(doc, month);
+  });
+  doc.save(`oncall-schedule-${monthsCount}mo.pdf`);
+}
+
+async function downloadXLSX(monthsCount){
+  const months = buildExportMonths(monthsCount);
+  const workbook = new ExcelJS.Workbook();
+  const thinBorder = { style:'thin', color:{ argb:'FFD3D6CC' } };
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  months.forEach(month => {
+    const sheetName = month.label.replace(/[\\/?*[\]:]/g,'').slice(0,31);
+    const sheet = workbook.addWorksheet(sheetName);
+    sheet.columns = dayNames.map(() => ({ width: 20 }));
+
+    // Title row, merged across all 7 columns, styled like the PDF header.
+    sheet.mergeCells(1,1,1,7);
+    const titleCell = sheet.getCell(1,1);
+    titleCell.value = month.label;
+    titleCell.font = { name:'Calibri', size:16, bold:true, color:{ argb:'FF1E2521' } };
+    titleCell.alignment = { vertical:'middle', horizontal:'left' };
+    sheet.getRow(1).height = 28;
+
+    // Weekday header row.
+    const headerRow = sheet.getRow(2);
+    dayNames.forEach((d,i) => {
+      const cell = headerRow.getCell(i+1);
+      cell.value = d;
+      cell.font = { bold:true, color:{ argb:'FF6B7268' }, size:10 };
+      cell.alignment = { horizontal:'center' };
+    });
+    headerRow.height = 18;
+
+    month.weeks.forEach(week => {
+      const row = sheet.addRow(week.map(day =>
+        day ? `${day.date.getDate()}\n${day.person}${day.phone ? '\n'+day.phone : ''}` : ''
+      ));
+      row.height = 54;
+      week.forEach((day, idx) => {
+        const cell = row.getCell(idx+1);
+        cell.alignment = { wrapText:true, vertical:'top', horizontal:'left' };
+        cell.border = { top:thinBorder, bottom:thinBorder, left:thinBorder, right:thinBorder };
+        if(day){
+          cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb: 'FF'+day.color.replace('#','').toUpperCase() } };
+          cell.font = { size:10, color:{ argb:'FF1E2521' } };
+        }
+      });
+    });
+  });
+  const buffer = await workbook.xlsx.writeBuffer();
+  triggerDownload(new Blob([buffer], { type:'application/octet-stream' }), `oncall-schedule-${monthsCount}mo.xlsx`);
+}
+
+document.getElementById('export-btn').addEventListener('click', async () => {
+  const monthsInput = document.getElementById('export-months');
+  const format = document.getElementById('export-format').value;
+  const errorEl = document.getElementById('export-error');
+  let months = parseInt(monthsInput.value, 10);
+  if(isNaN(months) || months < 1) months = 1;
+  if(months > 12) months = 12;
+  monthsInput.value = months;
+
+  if(!config.people.length || !config.anchorDate || !isFriday(config.anchorDate)){
+    errorEl.textContent = 'Set up your roster and rotation start date first.';
+    errorEl.style.display = 'block';
+    return;
+  }
+  errorEl.style.display = 'none';
+
+  const btn = document.getElementById('export-btn');
+  const originalText = btn.textContent;
+  btn.textContent = 'Preparing…';
+  btn.disabled = true;
+  try{
+    if(format === 'pdf') downloadPDF(months);
+    else await downloadXLSX(months);
+  }catch(e){
+    console.error(e);
+    errorEl.textContent = 'Something went wrong generating the file.';
+    errorEl.style.display = 'block';
+  }finally{
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 });
 
 // ---- Password gate --------------------------------------------------------
