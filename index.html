@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>On-call watch</title>
+<title>On-Call Watch</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
@@ -96,13 +96,33 @@
   .date-pair{display:flex;gap:8px;flex:1;}
   .date-pair input{width:100%;}
   label.field-label{font-size:13px;color:var(--muted);min-width:70px;}
+  .phone-line{font-size:14px;margin:0 0 16px;}
+  .phone-line a{color:var(--amber-deep);text-decoration:none;font-weight:500;}
+  .phone-line a:hover{text-decoration:underline;}
+  .phone-input{width:150px;flex:none;}
+
+  .gate{position:fixed;inset:0;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:24px;z-index:100;}
+  .gate-box{background:var(--card);border:0.5px solid var(--border);border-radius:14px;padding:28px 26px;max-width:320px;width:100%;}
+  .gate-title{font-family:'Source Serif 4',Georgia,serif;font-size:22px;font-weight:700;margin:0 0 6px;}
+  .gate-sub{font-size:13px;color:var(--muted);margin:0 0 18px;}
+  .gate-box input{width:100%;margin-bottom:10px;}
+  .gate-box button{width:100%;}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="gate" id="gate">
+  <div class="gate-box">
+    <p class="gate-title">On-call watch</p>
+    <p class="gate-sub">Enter the team password to view the schedule.</p>
+    <input type="password" id="gate-password" placeholder="Password" autocomplete="off">
+    <button id="gate-submit" class="primary">Unlock</button>
+    <p class="warn" id="gate-error" style="display:none;">That password isn't right.</p>
+  </div>
+</div>
+<div class="wrap" id="app" style="display:none;">
   <div class="masthead">
     <p class="title">On-call watch</p>
-    <span class="badge">Synced live for your team</span>
+    <span class="badge">Synced live</span>
   </div>
   <p class="tagline">Friday 7:30am handoffs, one week per shift.</p>
 
@@ -116,6 +136,7 @@
       <div id="swap-list"></div>
       <div class="field-row add-row">
         <input type="text" id="swap-name" placeholder="Who's covering">
+        <input type="text" id="swap-phone" class="phone-input" placeholder="Phone (optional)">
       </div>
       <div class="field-row add-row">
         <label class="field-label">From</label>
@@ -125,7 +146,7 @@
         </div>
       </div>
       <div class="field-row add-row">
-        <input type="text" id="swap-note" placeholder="Note (optional) — e.g. Priya out sick">
+        <input type="text" id="swap-note" placeholder="Note (optional) — e.g. Jamie out sick">
         <button id="swap-add-btn" class="primary">Add swap</button>
       </div>
       <p class="warn" id="swap-error" style="display:none;"></p>
@@ -138,6 +159,7 @@
       <div id="roster-list"></div>
       <div class="field-row add-row">
         <input type="text" id="new-name" placeholder="Add a name">
+        <input type="text" id="new-phone" class="phone-input" placeholder="Phone (optional)">
         <button id="add-btn">Add</button>
       </div>
       <div class="anchor-block">
@@ -197,9 +219,19 @@ function isFriday(dateStr){
   return d.getDay() === 5;
 }
 
+function normalizePerson(p){
+  if(typeof p === 'string') return { name: p, phone: '' };
+  return { name: p.name || '', phone: p.phone || '' };
+}
+
 function applyIncoming(parsed){
   config = Object.assign({ people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [] }, parsed);
   if(!Array.isArray(config.overrides)) config.overrides = [];
+  config.people = config.people.map(normalizePerson);
+}
+
+function telHref(phone){
+  return phone.replace(/[^\d+]/g, '');
 }
 
 async function loadConfig(){
@@ -240,7 +272,7 @@ function baseShiftsInRange(windowStart, windowEnd){
     const idx = (((anchorPersonIdx + w) % n)+n)%n;
     const start = new Date(anchor.getTime()+w*MS_WEEK);
     const end = new Date(start.getTime()+MS_WEEK);
-    base.push({ start, end, person: people[idx] });
+    base.push({ start, end, person: people[idx].name, phone: people[idx].phone });
   }
   return base;
 }
@@ -251,6 +283,7 @@ function overridesInRange(windowStart, windowEnd){
     start: new Date(o.start+'T00:00:00'),
     end: new Date(new Date(o.end+'T00:00:00').getTime() + MS_DAY),
     person: o.person,
+    phone: o.phone || '',
     note: o.note || ''
   })).filter(o => o.end > windowStart && o.start < windowEnd)
     .sort((a,b)=> a.start - b.start);
@@ -275,9 +308,9 @@ function buildSegments(windowStart, windowEnd){
     const ov = overrides.find(o => o.start <= segStart && segEnd <= o.end);
     const b = base.find(b => b.start <= segStart && segEnd <= b.end);
     if(ov){
-      segments.push({ start: segStart, end: segEnd, person: ov.person, isOverride: true, note: ov.note, basePerson: b ? b.person : null });
+      segments.push({ start: segStart, end: segEnd, person: ov.person, phone: ov.phone, isOverride: true, note: ov.note, basePerson: b ? b.person : null });
     } else if(b){
-      segments.push({ start: segStart, end: segEnd, person: b.person, isOverride: false });
+      segments.push({ start: segStart, end: segEnd, person: b.person, phone: b.phone, isOverride: false });
     }
   }
 
@@ -322,6 +355,7 @@ function renderHero(){
       <p class="hero-label">${label}</p>
       <p class="hero-name">${current.person}</p>
       ${current.isOverride ? `<p class="hero-cover">Covering${current.basePerson ? ' for ' + current.basePerson : ''}${current.note ? ' — ' + current.note : ''}</p>` : ''}
+      ${current.phone ? `<p class="phone-line"><a href="tel:${telHref(current.phone)}">${current.phone}</a></p>` : ''}
       <p class="hero-range">${started ? 'Since ' + fmtDateTime(current.start) : 'Starting ' + fmtDateTime(current.start)} → hands off ${fmtDateTime(current.end)}</p>
       <p class="hero-countdown"><b id="countdown-val"></b>${started ? 'until handoff' : 'until shift starts'}</p>
     </div>
@@ -392,7 +426,7 @@ function renderSwaps(){
       return `
         <div class="swap-row" data-id="${o.id}">
           <div class="swap-top">
-            <span><b>${o.person}</b> — ${range}</span>
+            <span><b>${o.person}</b>${o.phone ? ' · ' + o.phone : ''} — ${range}</span>
             <button class="icon-btn remove-swap" data-id="${o.id}" title="Remove">✕</button>
           </div>
           ${o.note ? `<div class="swap-note">${o.note}</div>` : ''}
@@ -415,18 +449,19 @@ function renderRoster(){
   const dateEl = document.getElementById('anchor-date');
   const hint = document.getElementById('anchor-hint');
 
-  listEl.innerHTML = config.people.map((name, i) => `
+  listEl.innerHTML = config.people.map((p, i) => `
     <div class="field-row" data-idx="${i}">
       <span class="name-count">${i+1}</span>
-      <input type="text" class="name-input" value="${name.replace(/"/g,'&quot;')}" data-idx="${i}">
+      <input type="text" class="name-input" value="${p.name.replace(/"/g,'&quot;')}" data-idx="${i}">
+      <input type="text" class="phone-input phone-field-input" value="${(p.phone||'').replace(/"/g,'&quot;')}" placeholder="Phone" data-idx="${i}">
       <button class="icon-btn move-up" data-idx="${i}" title="Move up" ${i===0?'disabled':''}>↑</button>
       <button class="icon-btn move-down" data-idx="${i}" title="Move down" ${i===config.people.length-1?'disabled':''}>↓</button>
       <button class="icon-btn remove-btn" data-idx="${i}" title="Remove">✕</button>
     </div>
   `).join('');
 
-  selectEl.innerHTML = config.people.map((name, i) =>
-    `<option value="${i}" ${i===config.anchorPersonIdx ? 'selected' : ''}>${name}</option>`
+  selectEl.innerHTML = config.people.map((p, i) =>
+    `<option value="${i}" ${i===config.anchorPersonIdx ? 'selected' : ''}>${p.name}</option>`
   ).join('');
 
   dateEl.value = config.anchorDate || '';
@@ -442,7 +477,15 @@ function renderRoster(){
   listEl.querySelectorAll('.name-input').forEach(inp => {
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
-      config.people[i] = e.target.value.trim() || config.people[i];
+      config.people[i].name = e.target.value.trim() || config.people[i].name;
+      saveConfig();
+      render();
+    });
+  });
+  listEl.querySelectorAll('.phone-field-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const i = +e.target.dataset.idx;
+      config.people[i].phone = e.target.value.trim();
       saveConfig();
       render();
     });
@@ -484,22 +527,27 @@ function render(){
   renderSwaps();
   renderRoster();
   const tzNote = document.getElementById('tz-note');
-  tzNote.textContent = `Times shown in your local timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}). Everyone on the team sees the same roster, swaps, and dates.`;
+  tzNote.textContent = `Timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`;
 }
 
 document.getElementById('add-btn').addEventListener('click', () => {
   const input = document.getElementById('new-name');
+  const phoneInput = document.getElementById('new-phone');
   const name = input.value.trim();
   if(!name) return;
-  config.people.push(name);
+  config.people.push({ name, phone: phoneInput.value.trim() });
   if(config.people.length === 1 && !config.anchorDate){
     document.getElementById('roster-details').open = true;
   }
   input.value = '';
+  phoneInput.value = '';
   saveConfig();
   render();
 });
 document.getElementById('new-name').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('add-btn').click();
+});
+document.getElementById('new-phone').addEventListener('keydown', e => {
   if(e.key === 'Enter') document.getElementById('add-btn').click();
 });
 document.getElementById('anchor-date').addEventListener('change', e => {
@@ -515,6 +563,7 @@ document.getElementById('anchor-person').addEventListener('change', e => {
 
 document.getElementById('swap-add-btn').addEventListener('click', () => {
   const nameEl = document.getElementById('swap-name');
+  const phoneEl = document.getElementById('swap-phone');
   const startEl = document.getElementById('swap-start');
   const endEl = document.getElementById('swap-end');
   const noteEl = document.getElementById('swap-note');
@@ -540,16 +589,44 @@ document.getElementById('swap-add-btn').addEventListener('click', () => {
   config.overrides.push({
     id: 'ov_' + Date.now() + '_' + Math.floor(Math.random()*1000),
     person: name,
+    phone: phoneEl.value.trim(),
     start,
     end,
     note: noteEl.value.trim()
   });
-  nameEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
+  nameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
   saveConfig();
   render();
 });
 
-loadConfig();
+// ---- Password gate --------------------------------------------------------
+const SITE_PASSWORD = 'Fonko';
+
+function showApp(){
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadConfig();
+}
+
+if(localStorage.getItem('oncall_unlocked') === 'yes'){
+  showApp();
+}
+
+document.getElementById('gate-submit').addEventListener('click', () => {
+  const val = document.getElementById('gate-password').value;
+  const errorEl = document.getElementById('gate-error');
+  if(val === SITE_PASSWORD){
+    localStorage.setItem('oncall_unlocked', 'yes');
+    errorEl.style.display = 'none';
+    showApp();
+  } else {
+    errorEl.style.display = 'block';
+  }
+});
+document.getElementById('gate-password').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('gate-submit').click();
+});
+// ----------------------------------------------------------------------------
 </script>
 </body>
 </html>
