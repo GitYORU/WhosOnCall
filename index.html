@@ -177,9 +177,12 @@
       <p class="hint">Cover a day, a few days, or a whole week without changing the regular rotation. For a full week, set it from a Friday through the following Thursday.</p>
       <div id="swap-list"></div>
       <div class="field-row add-row">
-        <input type="text" id="swap-name" placeholder="Who's covering">
+        <select id="swap-person-select"></select>
+      </div>
+      <div class="field-row add-row" id="swap-other-row" style="display:none;">
+        <input type="text" id="swap-name-other" placeholder="Name">
         <input type="text" id="swap-phone" class="phone-input" placeholder="Phone (optional)">
-        <input type="color" id="swap-color" class="color-input" title="Color for this swap">
+        <input type="color" id="swap-color" class="color-input" title="Color for this person">
       </div>
       <div class="field-row add-row">
         <label class="field-label">From</label>
@@ -217,6 +220,20 @@
         </div>
         <p class="hint" id="anchor-hint">Pick any Friday — that person starts their shift at 7:30am that day.</p>
       </div>
+      <div class="field-row" style="margin-top:16px;padding-top:14px;border-top:0.5px solid var(--border);justify-content:space-between;">
+        <span class="hint" id="roster-dirty-hint"></span>
+        <div style="display:flex;gap:8px;">
+          <button id="roster-discard-btn" type="button">Discard</button>
+          <button id="roster-save-btn" class="primary" type="button">Save changes</button>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details id="colors-details">
+    <summary>Person colors<span class="chev">▾</span></summary>
+    <div class="panel">
+      <div id="colors-list"></div>
     </div>
   </details>
 
@@ -269,8 +286,8 @@ let countdownTimer = null;
 const PALETTE = ['#D98E2B','#2F6E68','#5B7FBF','#B4432F','#7D5CA6','#3F9142','#C0577A','#8C6A3F','#4E8FA8','#A6772F'];
 const DEFAULT_COLOR = '#8C8C8C';
 
-function nextPaletteColor(){
-  return PALETTE[config.people.length % PALETTE.length];
+function paletteColorAt(n){
+  return PALETTE[n % PALETTE.length];
 }
 function personColorFor(name){
   const p = config.people.find(pp => pp.name.toLowerCase() === (name||'').toLowerCase());
@@ -281,6 +298,18 @@ function hexToRgb(hex){
   const full = m.length===3 ? m.split('').map(c=>c+c).join('') : m;
   const bigint = parseInt(full,16) || 0x8C8C8C;
   return [(bigint>>16)&255, (bigint>>8)&255, bigint&255];
+}
+
+// ---- Roster draft (edits here only publish when "Save changes" is clicked) ----
+let rosterDraft = null;
+let rosterDirty = false;
+
+function cloneRosterFromConfig(){
+  return {
+    people: config.people.map(p => ({ ...p })),
+    anchorDate: config.anchorDate,
+    anchorPersonIdx: config.anchorPersonIdx
+  };
 }
 
 function fmtDate(d){
@@ -561,26 +590,27 @@ function renderRoster(){
   const selectEl = document.getElementById('anchor-person');
   const dateEl = document.getElementById('anchor-date');
   const hint = document.getElementById('anchor-hint');
+  const draft = rosterDraft;
 
-  listEl.innerHTML = config.people.map((p, i) => `
+  listEl.innerHTML = draft.people.map((p, i) => `
     <div class="field-row" data-idx="${i}">
       <span class="name-count">${i+1}</span>
       <input type="text" class="name-input" value="${p.name.replace(/"/g,'&quot;')}" data-idx="${i}">
       <input type="text" class="phone-input phone-field-input" value="${(p.phone||'').replace(/"/g,'&quot;')}" placeholder="Phone" data-idx="${i}">
       <input type="color" class="color-input color-field-input" value="${p.color||DEFAULT_COLOR}" data-idx="${i}" title="Color">
       <button class="icon-btn move-up" data-idx="${i}" title="Move up" ${i===0?'disabled':''}>↑</button>
-      <button class="icon-btn move-down" data-idx="${i}" title="Move down" ${i===config.people.length-1?'disabled':''}>↓</button>
+      <button class="icon-btn move-down" data-idx="${i}" title="Move down" ${i===draft.people.length-1?'disabled':''}>↓</button>
       <button class="icon-btn remove-btn" data-idx="${i}" title="Remove">✕</button>
     </div>
   `).join('');
 
-  selectEl.innerHTML = config.people.map((p, i) =>
-    `<option value="${i}" ${i===config.anchorPersonIdx ? 'selected' : ''}>${p.name}</option>`
+  selectEl.innerHTML = draft.people.map((p, i) =>
+    `<option value="${i}" ${i===draft.anchorPersonIdx ? 'selected' : ''}>${p.name}</option>`
   ).join('');
 
-  dateEl.value = config.anchorDate || '';
+  dateEl.value = draft.anchorDate || '';
 
-  if(config.anchorDate && !isFriday(config.anchorDate)){
+  if(draft.anchorDate && !isFriday(draft.anchorDate)){
     hint.textContent = "That date isn't a Friday — pick a Friday so shifts line up with the 7:30am handoff.";
     hint.className = 'warn';
   } else {
@@ -588,58 +618,98 @@ function renderRoster(){
     hint.className = 'hint';
   }
 
+  const dirtyHint = document.getElementById('roster-dirty-hint');
+  const saveBtn = document.getElementById('roster-save-btn');
+  const discardBtn = document.getElementById('roster-discard-btn');
+  dirtyHint.textContent = rosterDirty ? 'Unsaved changes — not visible to the team yet.' : 'Everything here is saved.';
+  dirtyHint.className = rosterDirty ? 'warn' : 'hint';
+  saveBtn.disabled = !rosterDirty;
+  discardBtn.disabled = !rosterDirty;
+
   listEl.querySelectorAll('.name-input').forEach(inp => {
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
-      config.people[i].name = e.target.value.trim() || config.people[i].name;
-      saveConfig();
-      render();
+      draft.people[i].name = e.target.value.trim() || draft.people[i].name;
+      rosterDirty = true;
+      renderRoster();
     });
   });
   listEl.querySelectorAll('.phone-field-input').forEach(inp => {
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
-      config.people[i].phone = e.target.value.trim();
-      saveConfig();
-      render();
+      draft.people[i].phone = e.target.value.trim();
+      rosterDirty = true;
+      renderRoster();
     });
   });
   listEl.querySelectorAll('.color-field-input').forEach(inp => {
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
-      config.people[i].color = e.target.value;
-      saveConfig();
-      render();
+      draft.people[i].color = e.target.value;
+      rosterDirty = true;
+      renderRoster();
     });
   });
   listEl.querySelectorAll('.move-up').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = +btn.dataset.idx;
       if(i===0) return;
-      [config.people[i-1], config.people[i]] = [config.people[i], config.people[i-1]];
-      if(config.anchorPersonIdx===i) config.anchorPersonIdx = i-1;
-      else if(config.anchorPersonIdx===i-1) config.anchorPersonIdx = i;
-      saveConfig(); render();
+      [draft.people[i-1], draft.people[i]] = [draft.people[i], draft.people[i-1]];
+      if(draft.anchorPersonIdx===i) draft.anchorPersonIdx = i-1;
+      else if(draft.anchorPersonIdx===i-1) draft.anchorPersonIdx = i;
+      rosterDirty = true;
+      renderRoster();
     });
   });
   listEl.querySelectorAll('.move-down').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = +btn.dataset.idx;
-      if(i===config.people.length-1) return;
-      [config.people[i+1], config.people[i]] = [config.people[i], config.people[i+1]];
-      if(config.anchorPersonIdx===i) config.anchorPersonIdx = i+1;
-      else if(config.anchorPersonIdx===i+1) config.anchorPersonIdx = i;
-      saveConfig(); render();
+      if(i===draft.people.length-1) return;
+      [draft.people[i+1], draft.people[i]] = [draft.people[i], draft.people[i+1]];
+      if(draft.anchorPersonIdx===i) draft.anchorPersonIdx = i+1;
+      else if(draft.anchorPersonIdx===i+1) draft.anchorPersonIdx = i;
+      rosterDirty = true;
+      renderRoster();
     });
   });
   listEl.querySelectorAll('.remove-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = +btn.dataset.idx;
-      config.people.splice(i,1);
-      if(config.anchorPersonIdx >= config.people.length) config.anchorPersonIdx = Math.max(0, config.people.length-1);
-      saveConfig(); render();
+      draft.people.splice(i,1);
+      if(draft.anchorPersonIdx >= draft.people.length) draft.anchorPersonIdx = Math.max(0, draft.people.length-1);
+      rosterDirty = true;
+      renderRoster();
     });
   });
+}
+
+function renderColors(){
+  const wrap = document.getElementById('colors-list');
+  if(!wrap) return;
+  if(!config.people.length){
+    wrap.innerHTML = '<div class="empty">Add people to the roster to see their colors here.</div>';
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="upcoming">
+      ${config.people.map(p => `
+        <div class="row">
+          <span class="who who-line"><span class="dot" style="background:${p.color||DEFAULT_COLOR};"></span>${p.name}</span>
+          <span class="date" style="font-family:monospace;font-size:13px;">${(p.color||DEFAULT_COLOR).toUpperCase()}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderSwapPersonOptions(){
+  const sel = document.getElementById('swap-person-select');
+  if(!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = '<option value="">Who\'s covering…</option>' +
+    config.people.map(p => `<option value="${p.name.replace(/"/g,'&quot;')}">${p.name}</option>`).join('') +
+    '<option value="__other__">Someone else (one-off)</option>';
+  if(Array.from(sel.options).some(o => o.value === prevValue)) sel.value = prevValue;
 }
 
 function render(){
@@ -648,11 +718,14 @@ function render(){
   renderUpcoming();
   renderHistory();
   renderSwaps();
+  renderSwapPersonOptions();
+  if(!rosterDirty) rosterDraft = cloneRosterFromConfig();
   renderRoster();
+  renderColors();
   const tzNote = document.getElementById('tz-note');
   tzNote.textContent = `Timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`;
   const newColorInput = document.getElementById('new-color');
-  if(newColorInput && !newColorInput.dataset.touched) newColorInput.value = nextPaletteColor();
+  if(newColorInput && !newColorInput.dataset.touched) newColorInput.value = paletteColorAt(rosterDraft.people.length);
 }
 
 document.getElementById('add-btn').addEventListener('click', () => {
@@ -661,15 +734,17 @@ document.getElementById('add-btn').addEventListener('click', () => {
   const colorInput = document.getElementById('new-color');
   const name = input.value.trim();
   if(!name) return;
-  config.people.push({ name, phone: phoneInput.value.trim(), color: colorInput.value || nextPaletteColor() });
-  if(config.people.length === 1 && !config.anchorDate){
+  rosterDraft.people.push({ name, phone: phoneInput.value.trim(), color: colorInput.value || paletteColorAt(rosterDraft.people.length) });
+  rosterDirty = true;
+  if(rosterDraft.people.length === 1 && !rosterDraft.anchorDate){
     document.getElementById('roster-details').open = true;
   }
   input.value = '';
   phoneInput.value = '';
   colorInput.dataset.touched = '';
-  saveConfig();
-  render();
+  renderRoster();
+  const newColorInput = document.getElementById('new-color');
+  if(newColorInput) newColorInput.value = paletteColorAt(rosterDraft.people.length);
 });
 document.getElementById('new-color').addEventListener('input', e => { e.target.dataset.touched = '1'; });
 document.getElementById('new-name').addEventListener('keydown', e => {
@@ -679,18 +754,46 @@ document.getElementById('new-phone').addEventListener('keydown', e => {
   if(e.key === 'Enter') document.getElementById('add-btn').click();
 });
 document.getElementById('anchor-date').addEventListener('change', e => {
-  config.anchorDate = e.target.value;
+  rosterDraft.anchorDate = e.target.value;
+  rosterDirty = true;
+  renderRoster();
+});
+document.getElementById('anchor-person').addEventListener('change', e => {
+  rosterDraft.anchorPersonIdx = +e.target.value;
+  rosterDirty = true;
+  renderRoster();
+});
+document.getElementById('roster-save-btn').addEventListener('click', () => {
+  config.people = rosterDraft.people.map(p => ({ ...p }));
+  config.anchorDate = rosterDraft.anchorDate;
+  config.anchorPersonIdx = rosterDraft.anchorPersonIdx;
+  rosterDirty = false;
   saveConfig();
   render();
 });
-document.getElementById('anchor-person').addEventListener('change', e => {
-  config.anchorPersonIdx = +e.target.value;
-  saveConfig();
-  render();
+document.getElementById('roster-discard-btn').addEventListener('click', () => {
+  rosterDraft = cloneRosterFromConfig();
+  rosterDirty = false;
+  renderRoster();
+});
+
+document.getElementById('swap-person-select').addEventListener('change', e => {
+  const otherRow = document.getElementById('swap-other-row');
+  const colorEl = document.getElementById('swap-color');
+  if(e.target.value === '__other__'){
+    otherRow.style.display = 'flex';
+    document.getElementById('swap-name-other').value = '';
+    document.getElementById('swap-phone').value = '';
+    colorEl.value = DEFAULT_COLOR;
+    colorEl.dataset.touched = '';
+  } else {
+    otherRow.style.display = 'none';
+  }
 });
 
 document.getElementById('swap-add-btn').addEventListener('click', () => {
-  const nameEl = document.getElementById('swap-name');
+  const selectEl = document.getElementById('swap-person-select');
+  const otherNameEl = document.getElementById('swap-name-other');
   const phoneEl = document.getElementById('swap-phone');
   const colorEl = document.getElementById('swap-color');
   const startEl = document.getElementById('swap-start');
@@ -698,12 +801,13 @@ document.getElementById('swap-add-btn').addEventListener('click', () => {
   const noteEl = document.getElementById('swap-note');
   const errorEl = document.getElementById('swap-error');
 
-  const name = nameEl.value.trim();
+  const isOther = selectEl.value === '__other__';
+  const name = isOther ? otherNameEl.value.trim() : selectEl.value;
   const start = startEl.value;
   const end = endEl.value || start;
 
   if(!name || !start){
-    errorEl.textContent = 'Enter who is covering and a start date.';
+    errorEl.textContent = 'Choose who is covering and a start date.';
     errorEl.style.display = 'block';
     return;
   }
@@ -714,17 +818,24 @@ document.getElementById('swap-add-btn').addEventListener('click', () => {
   }
   errorEl.style.display = 'none';
 
+  const matchedPerson = config.people.find(p => p.name.toLowerCase() === name.toLowerCase());
+  const phone = isOther ? phoneEl.value.trim() : (matchedPerson ? (matchedPerson.phone || '') : '');
+  // For a roster pick, leave color blank so it always tracks that person's roster color automatically.
+  const color = isOther ? (colorEl.dataset.touched ? colorEl.value : '') : '';
+
   if(!config.overrides) config.overrides = [];
   config.overrides.push({
     id: 'ov_' + Date.now() + '_' + Math.floor(Math.random()*1000),
     person: name,
-    phone: phoneEl.value.trim(),
-    color: colorEl.dataset.touched ? colorEl.value : '',
+    phone,
+    color,
     start,
     end,
     note: noteEl.value.trim()
   });
-  nameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
+  selectEl.value = '';
+  otherNameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
+  document.getElementById('swap-other-row').style.display = 'none';
   colorEl.dataset.touched = '';
   saveConfig();
   render();
