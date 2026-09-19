@@ -1199,17 +1199,39 @@ function renderRemoteLinks(){
     listEl.innerHTML = '<div class="empty">No remote links yet.</div>';
     return;
   }
-  listEl.innerHTML = remoteLinks.map(l => `
+  listEl.innerHTML = remoteLinks.map((l, i) => `
     <div class="swap-row" data-id="${l.id}">
       <div class="swap-top">
         <a class="remote-link" href="${l.url.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer">${l.name}</a>
-        <button class="icon-btn remove-remote-link" data-id="${l.id}" title="Remove">✕</button>
+        <div style="display:flex;gap:4px;">
+          <button class="icon-btn move-remote-up" data-idx="${i}" title="Move up" ${i===0?'disabled':''}>↑</button>
+          <button class="icon-btn move-remote-down" data-idx="${i}" title="Move down" ${i===remoteLinks.length-1?'disabled':''}>↓</button>
+          <button class="icon-btn remove-remote-link" data-id="${l.id}" title="Remove">✕</button>
+        </div>
       </div>
     </div>
   `).join('');
   listEl.querySelectorAll('.remove-remote-link').forEach(btn => {
     btn.addEventListener('click', () => {
       remoteLinks = remoteLinks.filter(l => l.id !== btn.dataset.id);
+      saveRemoteLinks();
+      renderRemoteLinks();
+    });
+  });
+  listEl.querySelectorAll('.move-remote-up').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.idx;
+      if(i===0) return;
+      [remoteLinks[i-1], remoteLinks[i]] = [remoteLinks[i], remoteLinks[i-1]];
+      saveRemoteLinks();
+      renderRemoteLinks();
+    });
+  });
+  listEl.querySelectorAll('.move-remote-down').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.idx;
+      if(i===remoteLinks.length-1) return;
+      [remoteLinks[i+1], remoteLinks[i]] = [remoteLinks[i], remoteLinks[i+1]];
       saveRemoteLinks();
       renderRemoteLinks();
     });
