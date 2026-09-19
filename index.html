@@ -114,6 +114,11 @@
 
   .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;flex:none;}
   .color-input{width:36px;height:36px;padding:2px;flex:none;border-radius:8px;border:0.5px solid var(--border);background:var(--paper);}
+  .hex-input{width:88px;flex:none;font-family:'IBM Plex Sans',monospace;text-transform:uppercase;}
+  .masthead-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .remote-nav-btn{font-size:12px;padding:5px 12px;border-radius:20px;}
+  .remote-link{color:var(--teal-deep);text-decoration:none;font-weight:500;}
+  .remote-link:hover{text-decoration:underline;}
   .who-line{display:flex;align-items:center;}
   .hero-name-row{display:flex;align-items:center;}
   .hero-name-row .dot{width:14px;height:14px;margin-right:10px;}
@@ -157,7 +162,10 @@
 <div class="wrap" id="app" style="display:none;">
   <div class="masthead">
     <p class="title">On-call watch</p>
-    <span class="badge">Synced live</span>
+    <div class="masthead-right">
+      <button id="remote-links-btn" class="remote-nav-btn" type="button">Remote links</button>
+      <span class="badge">Synced live</span>
+    </div>
   </div>
   <p class="tagline">Friday 7:30am handoffs, one week per shift.</p>
 
@@ -183,6 +191,7 @@
         <input type="text" id="swap-name-other" placeholder="Name">
         <input type="text" id="swap-phone" class="phone-input" placeholder="Phone (optional)">
         <input type="color" id="swap-color" class="color-input" title="Color for this person">
+        <input type="text" id="swap-color-hex" class="hex-input" maxlength="7" placeholder="#RRGGBB" title="Hex code">
       </div>
       <div class="field-row add-row">
         <label class="field-label">From</label>
@@ -207,6 +216,7 @@
         <input type="text" id="new-name" placeholder="Add a name">
         <input type="text" id="new-phone" class="phone-input" placeholder="Phone (optional)">
         <input type="color" id="new-color" class="color-input" title="Color for this person">
+        <input type="text" id="new-color-hex" class="hex-input" maxlength="7" placeholder="#RRGGBB" title="Hex code">
         <button id="add-btn">Add</button>
       </div>
       <div class="anchor-block">
@@ -260,6 +270,37 @@
   <p class="footer-note" id="tz-note"></p>
 </div>
 
+<div class="wrap" id="remote-page" style="display:none;">
+  <div class="gate" id="remote-gate" style="display:none;">
+    <div class="gate-box">
+      <p class="gate-title">Remote links</p>
+      <p class="gate-sub">Enter the password to view remote links.</p>
+      <input type="password" id="remote-gate-password" placeholder="Password" autocomplete="off">
+      <button id="remote-gate-submit" class="primary">Unlock</button>
+      <p class="warn" id="remote-gate-error" style="display:none;">That password isn't right.</p>
+      <button id="remote-gate-back-btn" type="button" style="margin-top:8px;">← Back to schedule</button>
+    </div>
+  </div>
+
+  <div id="remote-content" style="display:none;">
+    <div class="masthead">
+      <p class="title">Remote links</p>
+      <button id="remote-back-btn" class="remote-nav-btn" type="button">← Back</button>
+    </div>
+    <p class="tagline">Quick links to remote systems, shared with the team.</p>
+
+    <div id="remote-links-list"></div>
+    <div class="field-row add-row">
+      <input type="text" id="remote-name" placeholder="Name (e.g. VPN, Prod server)">
+      <input type="text" id="remote-url" placeholder="https://…">
+    </div>
+    <div class="field-row add-row">
+      <button id="remote-add-btn" class="primary">Add link</button>
+    </div>
+    <p class="warn" id="remote-error" style="display:none;"></p>
+  </div>
+</div>
+
 <script>
 // ---- Firebase setup -----------------------------------------------------
 // Paste the config object from your Firebase project's web app settings here.
@@ -275,6 +316,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const docRef = db.collection('oncall').doc('config');
+const remoteDocRef = db.collection('oncall').doc('remoteLinks');
 // --------------------------------------------------------------------------
 
 const MS_DAY = 24*60*60*1000;
@@ -298,6 +340,13 @@ function hexToRgb(hex){
   const full = m.length===3 ? m.split('').map(c=>c+c).join('') : m;
   const bigint = parseInt(full,16) || 0x8C8C8C;
   return [(bigint>>16)&255, (bigint>>8)&255, bigint&255];
+}
+function normalizeHex(input){
+  let v = (input||'').trim();
+  if(!v) return null;
+  if(v[0] !== '#') v = '#' + v;
+  if(!/^#[0-9A-Fa-f]{6}$/.test(v)) return null;
+  return v.toUpperCase();
 }
 
 // ---- Roster draft (edits here only publish when "Save changes" is clicked) ----
@@ -598,6 +647,7 @@ function renderRoster(){
       <input type="text" class="name-input" value="${p.name.replace(/"/g,'&quot;')}" data-idx="${i}">
       <input type="text" class="phone-input phone-field-input" value="${(p.phone||'').replace(/"/g,'&quot;')}" placeholder="Phone" data-idx="${i}">
       <input type="color" class="color-input color-field-input" value="${p.color||DEFAULT_COLOR}" data-idx="${i}" title="Color">
+      <input type="text" class="hex-input hex-field-input" value="${(p.color||DEFAULT_COLOR).toUpperCase()}" data-idx="${i}" maxlength="7" title="Hex code">
       <button class="icon-btn move-up" data-idx="${i}" title="Move up" ${i===0?'disabled':''}>↑</button>
       <button class="icon-btn move-down" data-idx="${i}" title="Move down" ${i===draft.people.length-1?'disabled':''}>↓</button>
       <button class="icon-btn remove-btn" data-idx="${i}" title="Remove">✕</button>
@@ -646,6 +696,19 @@ function renderRoster(){
     inp.addEventListener('change', e => {
       const i = +e.target.dataset.idx;
       draft.people[i].color = e.target.value;
+      rosterDirty = true;
+      renderRoster();
+    });
+  });
+  listEl.querySelectorAll('.hex-field-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const i = +e.target.dataset.idx;
+      const normalized = normalizeHex(e.target.value);
+      if(!normalized){
+        e.target.value = (draft.people[i].color||DEFAULT_COLOR).toUpperCase();
+        return;
+      }
+      draft.people[i].color = normalized;
       rosterDirty = true;
       renderRoster();
     });
@@ -725,7 +788,12 @@ function render(){
   const tzNote = document.getElementById('tz-note');
   tzNote.textContent = `Timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}).`;
   const newColorInput = document.getElementById('new-color');
-  if(newColorInput && !newColorInput.dataset.touched) newColorInput.value = paletteColorAt(rosterDraft.people.length);
+  if(newColorInput && !newColorInput.dataset.touched){
+    const def = paletteColorAt(rosterDraft.people.length);
+    newColorInput.value = def;
+    const newColorHex = document.getElementById('new-color-hex');
+    if(newColorHex) newColorHex.value = def.toUpperCase();
+  }
 }
 
 document.getElementById('add-btn').addEventListener('click', () => {
@@ -744,9 +812,27 @@ document.getElementById('add-btn').addEventListener('click', () => {
   colorInput.dataset.touched = '';
   renderRoster();
   const newColorInput = document.getElementById('new-color');
-  if(newColorInput) newColorInput.value = paletteColorAt(rosterDraft.people.length);
+  const newColorHex = document.getElementById('new-color-hex');
+  const def = paletteColorAt(rosterDraft.people.length);
+  if(newColorInput) newColorInput.value = def;
+  if(newColorHex) newColorHex.value = def.toUpperCase();
 });
-document.getElementById('new-color').addEventListener('input', e => { e.target.dataset.touched = '1'; });
+document.getElementById('new-color').addEventListener('input', e => {
+  e.target.dataset.touched = '1';
+  const hexEl = document.getElementById('new-color-hex');
+  if(hexEl) hexEl.value = e.target.value.toUpperCase();
+});
+document.getElementById('new-color-hex').addEventListener('change', e => {
+  const colorInput = document.getElementById('new-color');
+  const normalized = normalizeHex(e.target.value);
+  if(normalized){
+    colorInput.value = normalized;
+    colorInput.dataset.touched = '1';
+    e.target.value = normalized;
+  } else {
+    e.target.value = colorInput.value.toUpperCase();
+  }
+});
 document.getElementById('new-name').addEventListener('keydown', e => {
   if(e.key === 'Enter') document.getElementById('add-btn').click();
 });
@@ -780,12 +866,14 @@ document.getElementById('roster-discard-btn').addEventListener('click', () => {
 document.getElementById('swap-person-select').addEventListener('change', e => {
   const otherRow = document.getElementById('swap-other-row');
   const colorEl = document.getElementById('swap-color');
+  const hexEl = document.getElementById('swap-color-hex');
   if(e.target.value === '__other__'){
     otherRow.style.display = 'flex';
     document.getElementById('swap-name-other').value = '';
     document.getElementById('swap-phone').value = '';
     colorEl.value = DEFAULT_COLOR;
     colorEl.dataset.touched = '';
+    if(hexEl) hexEl.value = DEFAULT_COLOR.toUpperCase();
   } else {
     otherRow.style.display = 'none';
   }
@@ -837,10 +925,27 @@ document.getElementById('swap-add-btn').addEventListener('click', () => {
   otherNameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
   document.getElementById('swap-other-row').style.display = 'none';
   colorEl.dataset.touched = '';
+  const swapColorHex = document.getElementById('swap-color-hex');
+  if(swapColorHex) swapColorHex.value = '';
   saveConfig();
   render();
 });
-document.getElementById('swap-color').addEventListener('input', e => { e.target.dataset.touched = '1'; });
+document.getElementById('swap-color').addEventListener('input', e => {
+  e.target.dataset.touched = '1';
+  const hexEl = document.getElementById('swap-color-hex');
+  if(hexEl) hexEl.value = e.target.value.toUpperCase();
+});
+document.getElementById('swap-color-hex').addEventListener('change', e => {
+  const colorEl = document.getElementById('swap-color');
+  const normalized = normalizeHex(e.target.value);
+  if(normalized){
+    colorEl.value = normalized;
+    colorEl.dataset.touched = '1';
+    e.target.value = normalized;
+  } else {
+    e.target.value = colorEl.value.toUpperCase();
+  }
+});
 
 function dayAssignment(date, segments){
   const noon = new Date(date); noon.setHours(12,0,0,0);
@@ -1052,6 +1157,129 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+// ---- Remote links page ------------------------------------------------------
+const REMOTE_PASSWORD = 'Remote';
+let remoteLinks = [];
+let remoteLoaded = false;
+
+function applyRemoteIncoming(parsed){
+  remoteLinks = Array.isArray(parsed.links) ? parsed.links : [];
+}
+
+async function loadRemoteLinks(){
+  try{
+    const snap = await remoteDocRef.get();
+    if(snap.exists) applyRemoteIncoming(snap.data());
+  }catch(e){
+    console.error('Could not load remote links — check your Firebase config and Firestore rules.', e);
+  }
+  remoteLoaded = true;
+  renderRemoteLinks();
+
+  remoteDocRef.onSnapshot(snap => {
+    if(!snap.exists) return;
+    applyRemoteIncoming(snap.data());
+    renderRemoteLinks();
+  });
+}
+
+async function saveRemoteLinks(){
+  try{
+    await remoteDocRef.set({ links: remoteLinks });
+  }catch(e){
+    console.error('Could not save remote links — check your Firebase config and Firestore rules.', e);
+  }
+}
+
+function renderRemoteLinks(){
+  const listEl = document.getElementById('remote-links-list');
+  if(!listEl) return;
+  if(!remoteLinks.length){
+    listEl.innerHTML = '<div class="empty">No remote links yet.</div>';
+    return;
+  }
+  listEl.innerHTML = remoteLinks.map(l => `
+    <div class="swap-row" data-id="${l.id}">
+      <div class="swap-top">
+        <a class="remote-link" href="${l.url.replace(/"/g,'&quot;')}" target="_blank" rel="noopener noreferrer">${l.name}</a>
+        <button class="icon-btn remove-remote-link" data-id="${l.id}" title="Remove">✕</button>
+      </div>
+    </div>
+  `).join('');
+  listEl.querySelectorAll('.remove-remote-link').forEach(btn => {
+    btn.addEventListener('click', () => {
+      remoteLinks = remoteLinks.filter(l => l.id !== btn.dataset.id);
+      saveRemoteLinks();
+      renderRemoteLinks();
+    });
+  });
+}
+
+document.getElementById('remote-add-btn').addEventListener('click', () => {
+  const nameEl = document.getElementById('remote-name');
+  const urlEl = document.getElementById('remote-url');
+  const errorEl = document.getElementById('remote-error');
+  const name = nameEl.value.trim();
+  let url = urlEl.value.trim();
+  if(!name || !url){
+    errorEl.textContent = 'Enter both a name and a link.';
+    errorEl.style.display = 'block';
+    return;
+  }
+  if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  errorEl.style.display = 'none';
+  remoteLinks.push({ id: 'rl_' + Date.now() + '_' + Math.floor(Math.random()*1000), name, url });
+  nameEl.value = ''; urlEl.value = '';
+  saveRemoteLinks();
+  renderRemoteLinks();
+});
+document.getElementById('remote-name').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('remote-url').focus();
+});
+document.getElementById('remote-url').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('remote-add-btn').click();
+});
+
+function showRemotePage(){
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('remote-page').style.display = 'block';
+  if(localStorage.getItem('remote_unlocked') === 'yes'){
+    unlockRemotePage();
+  } else {
+    document.getElementById('remote-gate').style.display = 'flex';
+    document.getElementById('remote-content').style.display = 'none';
+  }
+}
+function unlockRemotePage(){
+  document.getElementById('remote-gate').style.display = 'none';
+  document.getElementById('remote-content').style.display = 'block';
+  if(!remoteLoaded) loadRemoteLinks();
+}
+function hideRemotePage(){
+  document.getElementById('remote-page').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+}
+
+document.getElementById('remote-links-btn').addEventListener('click', showRemotePage);
+document.getElementById('remote-back-btn').addEventListener('click', hideRemotePage);
+document.getElementById('remote-gate-back-btn').addEventListener('click', hideRemotePage);
+document.getElementById('remote-gate-submit').addEventListener('click', () => {
+  const val = document.getElementById('remote-gate-password').value;
+  const errorEl = document.getElementById('remote-gate-error');
+  if(val === REMOTE_PASSWORD){
+    localStorage.setItem('remote_unlocked', 'yes');
+    errorEl.style.display = 'none';
+    document.getElementById('remote-gate-password').value = '';
+    unlockRemotePage();
+  } else {
+    errorEl.style.display = 'block';
+  }
+});
+document.getElementById('remote-gate-password').addEventListener('keydown', e => {
+  if(e.key === 'Enter') document.getElementById('remote-gate-submit').click();
+});
+// ------------------------------------------------------------------------------
 
 // ---- Password gate --------------------------------------------------------
 const SITE_PASSWORD = 'Fonko';
