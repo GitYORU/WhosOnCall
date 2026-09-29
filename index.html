@@ -1213,6 +1213,8 @@ function renderRemoteLinks(){
   `).join('');
   listEl.querySelectorAll('.remove-remote-link').forEach(btn => {
     btn.addEventListener('click', () => {
+      const link = remoteLinks.find(l => l.id === btn.dataset.id);
+      if(!confirm(`Remove "${link ? link.name : 'this link'}"?`)) return;
       remoteLinks = remoteLinks.filter(l => l.id !== btn.dataset.id);
       saveRemoteLinks();
       renderRemoteLinks();
