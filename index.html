@@ -117,6 +117,21 @@
   .hex-input{width:88px;flex:none;font-family:'IBM Plex Sans',monospace;text-transform:uppercase;}
   .masthead-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   .remote-nav-btn{font-size:12px;padding:5px 12px;border-radius:20px;}
+  .who-col{display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
+  .backup-line{font-size:12px;font-weight:400;color:var(--muted);display:flex;align-items:center;}
+  .dot-sm{width:7px;height:7px;margin-right:5px;}
+  .hero-backup{font-size:13px;color:var(--amber-deep);margin:0 0 6px;display:flex;align-items:center;flex-wrap:wrap;gap:0 4px;}
+  .hero-backup a{color:var(--amber-deep);font-weight:500;}
+  .hero-backup-dates{opacity:.85;}
+  .toggle-row{display:flex;align-items:center;gap:12px;margin:12px 0;}
+  .toggle-row .toggle-text{font-size:13px;color:var(--muted);flex:1;}
+  .switch{position:relative;width:46px;height:26px;flex:none;}
+  .switch input{opacity:0;width:0;height:0;position:absolute;}
+  .switch .slider{position:absolute;inset:0;background:var(--border);border-radius:26px;cursor:pointer;transition:background .15s ease;}
+  .switch .slider::before{content:'';position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .15s ease;}
+  .switch input:checked + .slider{background:var(--teal);}
+  .switch input:checked + .slider::before{transform:translateX(20px);}
+  .switch input:focus-visible + .slider{outline:2px solid var(--teal);outline-offset:2px;}
   .remote-link{color:var(--teal-deep);text-decoration:none;font-weight:500;}
   .remote-link:hover{text-decoration:underline;}
   .who-line{display:flex;align-items:center;}
@@ -208,6 +223,35 @@
     </div>
   </details>
 
+  <details id="backup-details">
+    <summary>Backup person<span class="chev">▾</span></summary>
+    <div class="panel">
+      <p class="hint">Name a backup for any dates. The regular on-call person stays on the schedule; the backup shows alongside them. Dates run from 7:30am on the first day to 7:30am after the last day, like swaps.</p>
+      <div id="backup-list"></div>
+      <div class="field-row add-row">
+        <select id="backup-person-select"></select>
+      </div>
+      <div class="field-row add-row" id="backup-other-row" style="display:none;">
+        <input type="text" id="backup-name-other" placeholder="Name">
+        <input type="text" id="backup-phone" class="phone-input" placeholder="Phone (optional)">
+        <input type="color" id="backup-color" class="color-input" title="Color for this person">
+        <input type="text" id="backup-color-hex" class="hex-input" maxlength="7" placeholder="#RRGGBB" title="Hex code">
+      </div>
+      <div class="field-row add-row">
+        <label class="field-label">From</label>
+        <div class="date-pair">
+          <input type="date" id="backup-start">
+          <input type="date" id="backup-end">
+        </div>
+      </div>
+      <div class="field-row add-row">
+        <input type="text" id="backup-note" placeholder="Note (optional)">
+        <button id="backup-add-btn" class="primary">Add backup</button>
+      </div>
+      <p class="warn" id="backup-error" style="display:none;"></p>
+    </div>
+  </details>
+
   <details id="roster-details">
     <summary>Edit roster and rotation<span class="chev">▾</span></summary>
     <div class="panel">
@@ -221,7 +265,7 @@
       </div>
       <div class="anchor-block">
         <div class="field-row">
-          <label for="anchor-date" style="font-size:13px;color:var(--muted);min-width:120px;">Rotation starts</label>
+          <label for="anchor-date" style="font-size:13px;color:var(--muted);min-width:120px;">Current rotation starts</label>
           <input type="date" id="anchor-date">
         </div>
         <div class="field-row">
@@ -229,6 +273,7 @@
           <select id="anchor-person"></select>
         </div>
         <p class="hint" id="anchor-hint">Pick any Friday — that person starts their shift at 7:30am that day.</p>
+        <p class="hint">Saved roster changes take effect at the next Friday handoff. Weeks already worked, and whoever is on call now, stay as they are.</p>
       </div>
       <div class="field-row" style="margin-top:16px;padding-top:14px;border-top:0.5px solid var(--border);justify-content:space-between;">
         <span class="hint" id="roster-dirty-hint"></span>
@@ -254,6 +299,14 @@
       <div class="export-row">
         <label for="export-months">Months to include</label>
         <input type="number" id="export-months" min="1" max="12" value="1">
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-text">Show backup person with the main person</span>
+        <label class="switch" title="Include backup people in the download">
+          <input type="checkbox" id="export-backups">
+          <span class="slider"></span>
+        </label>
+        <span id="export-backups-state" style="font-size:13px;font-weight:500;min-width:24px;">Off</span>
       </div>
       <div class="export-row">
         <label for="export-format">Format</label>
@@ -321,7 +374,7 @@ const remoteDocRef = db.collection('oncall').doc('remoteLinks');
 
 const MS_DAY = 24*60*60*1000;
 const MS_WEEK = 7*MS_DAY;
-let config = { people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [] };
+let config = { people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [], backups: [], pastShifts: [], freezeUntil: null };
 let loaded = false;
 let countdownTimer = null;
 
@@ -352,6 +405,7 @@ function normalizeHex(input){
 // ---- Roster draft (edits here only publish when "Save changes" is clicked) ----
 let rosterDraft = null;
 let rosterDirty = false;
+let rosterAnchorTouched = false; // true only when the user directly edits the start date / starting person
 
 function cloneRosterFromConfig(){
   return {
@@ -384,8 +438,10 @@ function normalizePerson(p, idx){
 }
 
 function applyIncoming(parsed){
-  config = Object.assign({ people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [] }, parsed);
+  config = Object.assign({ people: [], anchorDate: null, anchorPersonIdx: 0, overrides: [], backups: [], pastShifts: [], freezeUntil: null }, parsed);
   if(!Array.isArray(config.overrides)) config.overrides = [];
+  if(!Array.isArray(config.backups)) config.backups = [];
+  if(!Array.isArray(config.pastShifts)) config.pastShifts = [];
   config.people = config.people.map(normalizePerson);
 }
 
@@ -419,34 +475,103 @@ async function saveConfig(){
   }
 }
 
+// Add whole calendar days (keeps the wall-clock time, so 7:30am stays 7:30am across daylight saving).
+function addDays(d, n){
+  const r = new Date(d.getTime());
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function localDateStr(d){
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+function findPersonByName(name){
+  const n = (name||'').toLowerCase();
+  return config.people.find(p => p.name.toLowerCase() === n) || null;
+}
+
+// First moment the rotation exists: the earliest frozen shift if there is one, else the anchor Friday.
+function getRotationStart(){
+  const past = config.pastShifts || [];
+  if(past.length) return new Date(past[0].start);
+  if(config.anchorDate && isFriday(config.anchorDate)) return new Date(config.anchorDate+'T07:30:00');
+  return null;
+}
+
 function baseShiftsInRange(windowStart, windowEnd){
   const { people, anchorDate, anchorPersonIdx } = config;
+  const out = [];
+
+  // Weeks that were already worked are kept exactly as they were, no matter how the roster changes later.
+  (config.pastShifts || []).forEach(s => {
+    const start = new Date(s.start), end = new Date(s.end);
+    if(end > windowStart && start < windowEnd){
+      out.push({ start, end, person: s.person, phone: s.phone || '', color: s.color || '', frozen: true });
+    }
+  });
+
   const n = people.length;
-  if(!n || !anchorDate || !isFriday(anchorDate)) return [];
-  const anchor = new Date(anchorDate+'T07:30:00');
-  const wStartIdx = Math.floor((windowStart - anchor)/MS_WEEK) - 1;
-  const wEndIdx = Math.floor((windowEnd - anchor)/MS_WEEK) + 1;
-  const base = [];
-  for(let w=wStartIdx; w<=wEndIdx; w++){
-    const idx = (((anchorPersonIdx + w) % n)+n)%n;
-    const start = new Date(anchor.getTime()+w*MS_WEEK);
-    const end = new Date(start.getTime()+MS_WEEK);
-    base.push({ start, end, person: people[idx].name, phone: people[idx].phone });
+  if(n && anchorDate && isFriday(anchorDate)){
+    const anchor = new Date(anchorDate+'T07:30:00');
+    const freezeAt = config.freezeUntil ? new Date(config.freezeUntil) : null;
+    const frozenList = out.slice();
+    const wStartIdx = Math.floor((windowStart - anchor)/MS_WEEK) - 2;
+    const wEndIdx = Math.floor((windowEnd - anchor)/MS_WEEK) + 2;
+    for(let w=wStartIdx; w<=wEndIdx; w++){
+      const start = addDays(anchor, 7*w);
+      const end = addDays(anchor, 7*(w+1));
+      // Only weeks from the chosen start date onward (never invent earlier history), or anything after the
+      // frozen period so a later start date leaves no gap. A week that was already recorded always wins.
+      if(start < anchor && !(freezeAt && start >= freezeAt)) continue;
+      if(frozenList.some(f => f.start < end && f.end > start)) continue;
+      if(end <= windowStart || start >= windowEnd) continue;
+      const idx = (((anchorPersonIdx + w) % n)+n)%n;
+      out.push({ start, end, person: people[idx].name, phone: people[idx].phone, color: '', frozen: false });
+    }
   }
-  return base;
+  return out.sort((a,b)=> a.start - b.start);
 }
 
 function overridesInRange(windowStart, windowEnd){
   return (config.overrides||[]).map(o => ({
     id: o.id,
     start: new Date(o.start+'T07:30:00'),
-    end: new Date(new Date(o.end+'T07:30:00').getTime() + MS_DAY),
+    end: addDays(new Date(o.end+'T07:30:00'), 1),
     person: o.person,
     phone: o.phone || '',
     color: o.color || '',
     note: o.note || ''
   })).filter(o => o.end > windowStart && o.start < windowEnd)
     .sort((a,b)=> a.start - b.start);
+}
+
+// Backup periods use the same 7:30am day boundaries as swaps, with the end date included.
+function allBackups(){
+  return (config.backups||[]).map(b => {
+    const person = findPersonByName(b.person);
+    return {
+      id: b.id,
+      person: b.person,
+      phone: person ? (person.phone || '') : (b.phone || ''),
+      color: b.color || (person ? person.color : '') || DEFAULT_COLOR,
+      startStr: b.start,
+      endStr: b.end,
+      start: new Date(b.start+'T07:30:00'),
+      end: addDays(new Date(b.end+'T07:30:00'), 1),
+      note: b.note || ''
+    };
+  }).sort((a,b)=> a.start - b.start);
+}
+function backupsOverlapping(start, end){
+  return allBackups().filter(b => b.start < end && b.end > start);
+}
+function backupsAt(moment){
+  return allBackups().filter(b => b.start <= moment && moment < b.end);
+}
+
+function colorForShift(name, storedColor){
+  const p = findPersonByName(name);
+  return p ? (p.color || DEFAULT_COLOR) : (storedColor || DEFAULT_COLOR);
 }
 
 function buildSegments(windowStart, windowEnd){
@@ -468,9 +593,10 @@ function buildSegments(windowStart, windowEnd){
     const ov = overrides.find(o => o.start <= segStart && segEnd <= o.end);
     const b = base.find(b => b.start <= segStart && segEnd <= b.end);
     if(ov){
-      segments.push({ start: segStart, end: segEnd, person: ov.person, phone: ov.phone, color: ov.color || personColorFor(ov.person) || DEFAULT_COLOR, isOverride: true, note: ov.note, basePerson: b ? b.person : null });
+      segments.push({ start: segStart, end: segEnd, person: ov.person, phone: ov.phone, color: ov.color || colorForShift(ov.person, ''), isOverride: true, note: ov.note, basePerson: b ? b.person : null });
     } else if(b){
-      segments.push({ start: segStart, end: segEnd, person: b.person, phone: b.phone, color: personColorFor(b.person), isOverride: false });
+      const live = findPersonByName(b.person);
+      segments.push({ start: segStart, end: segEnd, person: b.person, phone: live ? (live.phone || '') : b.phone, color: colorForShift(b.person, b.color), isOverride: false });
     }
   }
 
@@ -483,7 +609,19 @@ function buildSegments(windowStart, windowEnd){
       merged.push(Object.assign({}, s));
     }
   }
+  // Backups never split a shift; each shift just lists the backups that overlap it.
+  merged.forEach(s => { s.backups = backupsOverlapping(s.start, s.end); });
   return merged;
+}
+
+function backupRangeText(b){
+  const s = new Date(b.startStr+'T00:00:00'), e = new Date(b.endStr+'T00:00:00');
+  return b.startStr === b.endStr ? fmtDayOnly(s) : `${fmtDayOnly(s)} – ${fmtDayOnly(e)}`;
+}
+function backupLinesHtml(seg){
+  return (seg.backups||[]).map(b =>
+    `<span class="backup-line"><span class="dot dot-sm" style="background:${b.color};"></span>Backup: ${b.person} (${backupRangeText(b)})</span>`
+  ).join('');
 }
 
 function renderHero(){
@@ -492,7 +630,7 @@ function renderHero(){
     hero.innerHTML = '<div class="empty">Add your team and a start date below to begin tracking the rotation.</div>';
     return;
   }
-  const anchor = new Date(config.anchorDate+'T07:30:00');
+  const anchor = getRotationStart();
   const now = new Date();
   const started = now >= anchor;
 
@@ -516,6 +654,7 @@ function renderHero(){
       <p class="hero-name-row"><span class="dot" style="background:${current.color||DEFAULT_COLOR};"></span><span class="hero-name">${current.person}</span></p>
       ${current.isOverride ? `<p class="hero-cover">Covering${current.basePerson ? ' for ' + current.basePerson : ''}${current.note ? ' — ' + current.note : ''}</p>` : ''}
       ${current.phone ? `<p class="phone-line"><a href="tel:${telHref(current.phone)}">${current.phone}</a></p>` : ''}
+      ${(current.backups||[]).map(b => `<p class="hero-backup"><span class="dot" style="background:${b.color};"></span>${(b.start <= now && now < b.end) ? 'Backup now' : 'Backup'}: <b>${b.person}</b>${b.phone ? ` · <a href="tel:${telHref(b.phone)}">${b.phone}</a>` : ''} <span class="hero-backup-dates">${backupRangeText(b)}</span></p>`).join('')}
       <p class="hero-range">${started ? 'Since ' + fmtDateTime(current.start) : 'Starting ' + fmtDateTime(current.start)} → hands off ${fmtDateTime(current.end)}</p>
       <p class="hero-countdown"><b id="countdown-val"></b>${started ? 'until handoff' : 'until shift starts'}</p>
     </div>
@@ -547,7 +686,7 @@ function renderUpcoming(){
     wrap.innerHTML = '';
     return;
   }
-  const anchor = new Date(config.anchorDate+'T07:30:00');
+  const anchor = getRotationStart();
   const now = new Date();
   const windowStart = new Date(Math.min(+anchor, +now) - MS_WEEK);
   const windowEnd = new Date(Math.max(+anchor, +now) + 9*MS_WEEK);
@@ -566,11 +705,22 @@ function renderUpcoming(){
         return `
         <div class="row">
           <span class="date">${range}</span>
-          <span class="who who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covering</span>' : ''}</span>
+          <span class="who who-col"><span class="who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covering</span>' : ''}</span>${backupLinesHtml(s)}</span>
         </div>
       `;}).join('')}
     </div>
   `;
+}
+
+// Shifts that have fully finished within the last 4 weeks, newest first. The window runs past "now" so the
+// shift in progress keeps its real end time and is correctly left out.
+function historySegments(now){
+  const historyStart = addDays(now, -28);
+  const windowStart = addDays(historyStart, -14);
+  const windowEnd = addDays(now, 14);
+  return buildSegments(windowStart, windowEnd)
+    .filter(s => +s.end <= +now && +s.end > +historyStart)
+    .reverse();
 }
 
 function renderHistory(){
@@ -579,14 +729,7 @@ function renderHistory(){
     wrap.innerHTML = '<div class="empty">Nothing to show yet.</div>';
     return;
   }
-  const anchor = new Date(config.anchorDate+'T07:30:00');
-  const now = new Date();
-  const historyStart = new Date(now.getTime() - 4*MS_WEEK);
-  const windowStart = new Date(Math.min(+anchor, +historyStart));
-  const windowEnd = now;
-  const segments = buildSegments(windowStart, windowEnd);
-
-  const list = segments.filter(s => +s.end <= +now && +s.end > +historyStart).slice().reverse();
+  const list = historySegments(new Date());
   if(!list.length){ wrap.innerHTML = '<div class="empty">Nothing in the last 4 weeks.</div>'; return; }
 
   wrap.innerHTML = `
@@ -597,7 +740,7 @@ function renderHistory(){
         return `
         <div class="row">
           <span class="date">${range}</span>
-          <span class="who who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covered</span>' : ''}</span>
+          <span class="who who-col"><span class="who-line"><span class="dot" style="background:${s.color||DEFAULT_COLOR};"></span>${s.person}${s.isOverride ? '<span class="tag">covered</span>' : ''}</span>${backupLinesHtml(s)}</span>
         </div>
       `;}).join('')}
     </div>
@@ -775,6 +918,40 @@ function renderSwapPersonOptions(){
   if(Array.from(sel.options).some(o => o.value === prevValue)) sel.value = prevValue;
 }
 
+function renderBackupPersonOptions(){
+  const sel = document.getElementById('backup-person-select');
+  if(!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = '<option value="">Who\'s the backup…</option>' +
+    config.people.map(p => `<option value="${p.name.replace(/"/g,'&quot;')}">${p.name}</option>`).join('') +
+    '<option value="__other__">Someone else (one-off)</option>';
+  if(Array.from(sel.options).some(o => o.value === prevValue)) sel.value = prevValue;
+}
+
+function renderBackups(){
+  const listEl = document.getElementById('backup-list');
+  if(!listEl) return;
+  const list = allBackups();
+  if(!list.length){ listEl.innerHTML = ''; return; }
+  listEl.innerHTML = list.map(b => `
+    <div class="swap-row" data-id="${b.id}">
+      <div class="swap-top">
+        <span class="who-line"><span class="dot" style="background:${b.color};"></span><b>${b.person}</b>${b.phone ? '&nbsp;· ' + b.phone : ''}&nbsp;— ${backupRangeText(b)}</span>
+        <button class="icon-btn remove-backup" data-id="${b.id}" title="Remove">✕</button>
+      </div>
+      ${b.note ? `<div class="swap-note">${b.note}</div>` : ''}
+    </div>
+  `).join('');
+  listEl.querySelectorAll('.remove-backup').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const b = (config.backups||[]).find(x => x.id === btn.dataset.id);
+      if(!confirm(`Remove backup "${b ? b.person : 'this backup'}"?`)) return;
+      config.backups = config.backups.filter(x => x.id !== btn.dataset.id);
+      saveConfig(); render();
+    });
+  });
+}
+
 function render(){
   if(!loaded) return;
   renderHero();
@@ -782,7 +959,9 @@ function render(){
   renderHistory();
   renderSwaps();
   renderSwapPersonOptions();
-  if(!rosterDirty) rosterDraft = cloneRosterFromConfig();
+  renderBackups();
+  renderBackupPersonOptions();
+  if(!rosterDirty){ rosterDraft = cloneRosterFromConfig(); rosterAnchorTouched = false; }
   renderRoster();
   renderColors();
   const tzNote = document.getElementById('tz-note');
@@ -841,25 +1020,86 @@ document.getElementById('new-phone').addEventListener('keydown', e => {
 });
 document.getElementById('anchor-date').addEventListener('change', e => {
   rosterDraft.anchorDate = e.target.value;
+  rosterAnchorTouched = true;
   rosterDirty = true;
   renderRoster();
 });
 document.getElementById('anchor-person').addEventListener('change', e => {
   rosterDraft.anchorPersonIdx = +e.target.value;
+  rosterAnchorTouched = true;
   rosterDirty = true;
   renderRoster();
 });
+
+// Saving the roster must never rewrite weeks that were already worked. We freeze everything up to the end of
+// the shift in progress, then the new roster takes over at the next Friday handoff.
+function applyRosterDraft(draft){
+  const old = config;
+  const now = new Date();
+  const oldStart = getRotationStart();
+  const oldValid = old.people.length && old.anchorDate && isFriday(old.anchorDate) && oldStart && now >= oldStart;
+
+  if(!oldValid){
+    config.people = draft.people.map(p => ({ ...p }));
+    config.anchorDate = draft.anchorDate;
+    config.anchorPersonIdx = draft.anchorPersonIdx;
+    return;
+  }
+
+  const all = baseShiftsInRange(oldStart, addDays(now, 21)).filter(s => s.start >= oldStart);
+  const current = all.find(s => s.start <= now && now < s.end);
+  if(!current){
+    config.people = draft.people.map(p => ({ ...p }));
+    config.anchorDate = draft.anchorDate;
+    config.anchorPersonIdx = draft.anchorPersonIdx;
+    return;
+  }
+
+  const frozen = all.filter(s => s.end <= current.end).map(s => {
+    const live = findPersonByName(s.person);
+    return { start: s.start.toISOString(), end: s.end.toISOString(), person: s.person, phone: live ? (live.phone||'') : (s.phone||''), color: colorForShift(s.person, s.color) };
+  });
+
+  let nextAnchorDate, nextIdx;
+  if(rosterAnchorTouched){
+    nextAnchorDate = draft.anchorDate;
+    nextIdx = draft.anchorPersonIdx;
+  } else {
+    // Keep the rotation flowing: whoever follows the person on call now, in the new roster order.
+    nextAnchorDate = localDateStr(current.end);
+    const names = draft.people.map(p => p.name.toLowerCase());
+    let found = names.indexOf(current.person.toLowerCase());
+    if(found >= 0){
+      nextIdx = (found + 1) % draft.people.length;
+    } else {
+      nextIdx = 0;
+      const oldIdx = old.people.findIndex(p => p.name.toLowerCase() === current.person.toLowerCase());
+      for(let k=1; k<=old.people.length && oldIdx >= 0; k++){
+        const candidate = old.people[(oldIdx + k) % old.people.length].name.toLowerCase();
+        const at = names.indexOf(candidate);
+        if(at >= 0){ nextIdx = at; break; }
+      }
+    }
+  }
+
+  config.pastShifts = frozen;
+  config.freezeUntil = current.end.toISOString();
+  config.people = draft.people.map(p => ({ ...p }));
+  config.anchorDate = nextAnchorDate;
+  config.anchorPersonIdx = nextIdx;
+}
+
 document.getElementById('roster-save-btn').addEventListener('click', () => {
-  config.people = rosterDraft.people.map(p => ({ ...p }));
-  config.anchorDate = rosterDraft.anchorDate;
-  config.anchorPersonIdx = rosterDraft.anchorPersonIdx;
+  applyRosterDraft(rosterDraft);
   rosterDirty = false;
+  rosterAnchorTouched = false;
   saveConfig();
   render();
 });
 document.getElementById('roster-discard-btn').addEventListener('click', () => {
   rosterDraft = cloneRosterFromConfig();
   rosterDirty = false;
+  rosterAnchorTouched = false;
   renderRoster();
 });
 
@@ -947,14 +1187,96 @@ document.getElementById('swap-color-hex').addEventListener('change', e => {
   }
 });
 
+
+// ---- Backup person form ----
+document.getElementById('backup-person-select').addEventListener('change', e => {
+  const otherRow = document.getElementById('backup-other-row');
+  const colorEl = document.getElementById('backup-color');
+  const hexEl = document.getElementById('backup-color-hex');
+  if(e.target.value === '__other__'){
+    otherRow.style.display = 'flex';
+    document.getElementById('backup-name-other').value = '';
+    document.getElementById('backup-phone').value = '';
+    colorEl.value = DEFAULT_COLOR;
+    colorEl.dataset.touched = '';
+    if(hexEl) hexEl.value = DEFAULT_COLOR.toUpperCase();
+  } else {
+    otherRow.style.display = 'none';
+  }
+});
+document.getElementById('backup-color').addEventListener('input', e => {
+  e.target.dataset.touched = '1';
+  document.getElementById('backup-color-hex').value = e.target.value.toUpperCase();
+});
+document.getElementById('backup-color-hex').addEventListener('change', e => {
+  const colorEl = document.getElementById('backup-color');
+  const normalized = normalizeHex(e.target.value);
+  if(normalized){
+    colorEl.value = normalized;
+    colorEl.dataset.touched = '1';
+    e.target.value = normalized;
+  } else {
+    e.target.value = colorEl.value.toUpperCase();
+  }
+});
+document.getElementById('backup-add-btn').addEventListener('click', () => {
+  const selectEl = document.getElementById('backup-person-select');
+  const otherNameEl = document.getElementById('backup-name-other');
+  const phoneEl = document.getElementById('backup-phone');
+  const colorEl = document.getElementById('backup-color');
+  const startEl = document.getElementById('backup-start');
+  const endEl = document.getElementById('backup-end');
+  const noteEl = document.getElementById('backup-note');
+  const errorEl = document.getElementById('backup-error');
+
+  const isOther = selectEl.value === '__other__';
+  const name = isOther ? otherNameEl.value.trim() : selectEl.value;
+  const start = startEl.value;
+  const end = endEl.value || start;
+
+  if(!name || !start){
+    errorEl.textContent = 'Choose a backup person and a start date.';
+    errorEl.style.display = 'block';
+    return;
+  }
+  if(end < start){
+    errorEl.textContent = 'End date is before the start date.';
+    errorEl.style.display = 'block';
+    return;
+  }
+  errorEl.style.display = 'none';
+
+  if(!config.backups) config.backups = [];
+  config.backups.push({
+    id: 'bk_' + Date.now() + '_' + Math.floor(Math.random()*1000),
+    person: name,
+    phone: isOther ? phoneEl.value.trim() : '',
+    // A roster pick leaves color blank so it follows that person's roster color.
+    color: isOther ? (colorEl.dataset.touched ? colorEl.value : '') : '',
+    start,
+    end,
+    note: noteEl.value.trim()
+  });
+  selectEl.value = '';
+  otherNameEl.value = ''; phoneEl.value = ''; startEl.value = ''; endEl.value = ''; noteEl.value = '';
+  document.getElementById('backup-other-row').style.display = 'none';
+  colorEl.dataset.touched = '';
+  document.getElementById('backup-color-hex').value = '';
+  saveConfig();
+  render();
+});
+
 function dayAssignment(date, segments){
   const noon = new Date(date); noon.setHours(12,0,0,0);
   const seg = segments.find(s => s.start <= noon && noon < s.end);
   if(!seg) return null;
-  return { person: seg.person, phone: seg.phone || '', color: seg.color || DEFAULT_COLOR, isOverride: seg.isOverride };
+  return {
+    person: seg.person, phone: seg.phone || '', color: seg.color || DEFAULT_COLOR, isOverride: seg.isOverride,
+    backups: backupsAt(noon).map(b => ({ person: b.person, phone: b.phone || '', color: b.color }))
+  };
 }
 
-function buildExportMonths(monthsCount){
+function buildExportMonths(monthsCount, includeBackups){
   const today = new Date();
   const firstMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   const rangeStart = firstMonth;
@@ -976,7 +1298,8 @@ function buildExportMonths(monthsCount){
         person: assignment ? assignment.person : '—',
         phone: assignment ? assignment.phone : '',
         color: assignment ? assignment.color : '#D3D6CC',
-        isOverride: assignment ? assignment.isOverride : false
+        isOverride: assignment ? assignment.isOverride : false,
+        backups: (includeBackups && assignment) ? assignment.backups : []
       });
     }
     while(cells.length % 7 !== 0) cells.push(null);
@@ -1037,24 +1360,70 @@ function drawMonthPage(doc, month){
         const [tr,tg,tb] = textColorForBg([r,g,b]);
         doc.setTextColor(tr,tg,tb);
         const padX = 7;
-        let cursorY = y + 16;
+        const innerW = cellW - padX*2;
+        const bottom = y + cellH - 4;
+        // Six-week months have shorter cells, so everything steps down a size to keep backups readable.
+        const S = cellH < 100
+          ? { day:10, dayY:13, name:9,  nameLH:11, phone:8,   phoneLH:10, bk:8,   bkLH:10, bkPh:8   }
+          : { day:11, dayY:16, name:10, nameLH:12, phone:9,   phoneLH:11, bk:9,   bkLH:11, bkPh:8.5 };
+
+        // `last` always holds the baseline of the most recently drawn line; each new line sits one line-height below.
+        let last = y + S.dayY;
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(S.day);
+        doc.text(String(day.date.getDate()), x+padX, last);
 
         doc.setFont('helvetica','bold');
-        doc.setFontSize(11);
-        doc.text(String(day.date.getDate()), x+padX, cursorY);
-        cursorY += 15;
-
-        doc.setFont('helvetica','bold');
-        doc.setFontSize(10);
-        const nameLines = doc.splitTextToSize(day.person, cellW - padX*2);
-        doc.text(nameLines, x+padX, cursorY);
-        cursorY += nameLines.length * 12;
+        doc.setFontSize(S.name);
+        const nameLines = doc.splitTextToSize(day.person, innerW);
+        let by = last + S.nameLH + 2;
+        doc.text(nameLines, x+padX, by);
+        last = by + (nameLines.length - 1) * S.nameLH;
 
         if(day.phone){
           doc.setFont('helvetica','normal');
-          doc.setFontSize(9);
-          const phoneLines = doc.splitTextToSize(day.phone, cellW - padX*2);
-          doc.text(phoneLines, x+padX, cursorY + 3);
+          doc.setFontSize(S.phone);
+          const phoneLines = doc.splitTextToSize(day.phone, innerW);
+          by = last + S.phoneLH + 1;
+          doc.text(phoneLines, x+padX, by);
+          last = by + (phoneLines.length - 1) * S.phoneLH;
+        }
+
+        if(day.backups && day.backups.length){
+          // Divider gets its own band between the main person and the backups, clear of both.
+          const divY = last + 5;
+          if(divY + S.bkLH <= bottom){
+            doc.setDrawColor(tr,tg,tb);
+            doc.setLineWidth(0.4);
+            doc.line(x+padX, divY, x+cellW-padX, divY);
+            last = divY;
+            let first = true;
+            for(const bk of day.backups){
+              by = last + S.bkLH + (first ? 0 : 1);
+              if(by > bottom) break;
+              first = false;
+              // swatch in the backup person's own color, outlined so it reads on any cell color
+              const [br,bg,bb] = hexToRgb(bk.color);
+              doc.setFillColor(br,bg,bb);
+              doc.setDrawColor(tr,tg,tb);
+              doc.setLineWidth(0.6);
+              doc.rect(x+padX, by - 6.5, 6.5, 6.5, 'FD');
+              doc.setFont('helvetica','bold');
+              doc.setFontSize(S.bk);
+              doc.setTextColor(tr,tg,tb);
+              const bLines = doc.splitTextToSize('Backup: ' + bk.person, innerW - 10);
+              const room = Math.max(1, Math.floor((bottom - by) / S.bkLH) + 1);
+              const shown = bLines.slice(0, room);
+              doc.text(shown, x+padX+10, by);
+              last = by + (shown.length - 1) * S.bkLH;
+              if(bk.phone && last + S.bkLH <= bottom){
+                doc.setFont('helvetica','normal');
+                doc.setFontSize(S.bkPh);
+                last += S.bkLH;
+                doc.text(bk.phone, x+padX+10, last);
+              }
+            }
+          }
         }
       } else {
         doc.setDrawColor(230,230,225);
@@ -1065,19 +1434,19 @@ function drawMonthPage(doc, month){
   });
 }
 
-function downloadPDF(monthsCount){
+function downloadPDF(monthsCount, includeBackups){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation:'landscape', unit:'pt', format:'a4' });
-  const months = buildExportMonths(monthsCount);
+  const months = buildExportMonths(monthsCount, includeBackups);
   months.forEach((month, mi) => {
     if(mi>0) doc.addPage();
     drawMonthPage(doc, month);
   });
-  doc.save(`oncall-schedule-${monthsCount}mo.pdf`);
+  doc.save(`oncall-schedule-${monthsCount}mo${includeBackups ? '-with-backup' : ''}.pdf`);
 }
 
-async function downloadXLSX(monthsCount){
-  const months = buildExportMonths(monthsCount);
+async function downloadXLSX(monthsCount, includeBackups){
+  const months = buildExportMonths(monthsCount, includeBackups);
   const workbook = new ExcelJS.Workbook();
   const thinBorder = { style:'thin', color:{ argb:'FFD3D6CC' } };
   const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1106,10 +1475,19 @@ async function downloadXLSX(monthsCount){
     headerRow.height = 18;
 
     month.weeks.forEach(week => {
-      const row = sheet.addRow(week.map(day =>
-        day ? `${day.date.getDate()}\n${day.person}${day.phone ? '\n'+day.phone : ''}` : ''
-      ));
-      row.height = 54;
+      const row = sheet.addRow(week.map(day => {
+        if(!day) return '';
+        let text = `${day.date.getDate()}\n${day.person}${day.phone ? '\n'+day.phone : ''}`;
+        (day.backups||[]).forEach(bk => { text += `\nBackup: ${bk.person}${bk.phone ? '\n'+bk.phone : ''}`; });
+        return text;
+      }));
+      const mostLines = Math.max(...week.map(day => {
+        if(!day) return 0;
+        let n = 2 + (day.phone ? 1 : 0);
+        (day.backups||[]).forEach(bk => { n += 1 + (bk.phone ? 1 : 0); });
+        return n;
+      }));
+      row.height = Math.max(54, mostLines * 14 + 8);
       week.forEach((day, idx) => {
         const cell = row.getCell(idx+1);
         cell.alignment = { wrapText:true, vertical:'top', horizontal:'left' };
@@ -1122,12 +1500,17 @@ async function downloadXLSX(monthsCount){
     });
   });
   const buffer = await workbook.xlsx.writeBuffer();
-  triggerDownload(new Blob([buffer], { type:'application/octet-stream' }), `oncall-schedule-${monthsCount}mo.xlsx`);
+  triggerDownload(new Blob([buffer], { type:'application/octet-stream' }), `oncall-schedule-${monthsCount}mo${includeBackups ? '-with-backup' : ''}.xlsx`);
 }
+
+document.getElementById('export-backups').addEventListener('change', e => {
+  document.getElementById('export-backups-state').textContent = e.target.checked ? 'On' : 'Off';
+});
 
 document.getElementById('export-btn').addEventListener('click', async () => {
   const monthsInput = document.getElementById('export-months');
   const format = document.getElementById('export-format').value;
+  const includeBackups = document.getElementById('export-backups').checked;
   const errorEl = document.getElementById('export-error');
   let months = parseInt(monthsInput.value, 10);
   if(isNaN(months) || months < 1) months = 1;
@@ -1146,8 +1529,8 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   btn.textContent = 'Preparing…';
   btn.disabled = true;
   try{
-    if(format === 'pdf') downloadPDF(months);
-    else await downloadXLSX(months);
+    if(format === 'pdf') downloadPDF(months, includeBackups);
+    else await downloadXLSX(months, includeBackups);
   }catch(e){
     console.error(e);
     errorEl.textContent = 'Something went wrong generating the file.';
